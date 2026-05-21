@@ -140,14 +140,15 @@ def get_financial_statement(corp_code: str, year: int, fs_div: str = "CFS") -> p
 
 
 def get_market_cap(stock_code: str) -> str:
-    """네이버 금융에서 시총 조회"""
+    """네이버 실시간 API에서 시총 조회"""
     try:
-        url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        res.encoding = "euc-kr"
-        mc = re.search(r'시가총액.*?([\d,]+)억원', res.text)
-        if mc:
-            return mc.group(1) + "억원"
+        url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{stock_code}"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        if r.status_code == 200:
+            raw = r.json().get("datas", [{}])[0].get("marketValueFullRaw", "")
+            if raw:
+                mc_억 = int(raw) // 100_000_000
+                return f"{mc_억:,}억원"
     except Exception:
         pass
     return "조회불가"
@@ -200,7 +201,11 @@ def get_financials(stock_code: str) -> str:
         if op_income is not None:
             parts.append(f"영업이익 {op_income/1e8:,.0f}억")
 
-        ctrl_income = get_val(yr_df, "지배주주순이익")
+        ctrl_income = get_val(yr_df,
+            "지배주주순이익",
+            "지배기업의 소유주에게 귀속되는 당기순이익",
+            "지배기업주주지분순이익",
+        )
         if ctrl_income is not None:
             parts.append(f"지배순이익 {ctrl_income/1e8:,.0f}억")
 
