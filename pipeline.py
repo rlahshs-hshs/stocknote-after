@@ -193,11 +193,11 @@ def get_financials(stock_code: str) -> str:
         yr_df = raw[raw["year"] == yr]
         parts = []
 
-        revenue = get_val(yr_df, "매출액")
+        revenue = get_val(yr_df, "매출액", "수익(매출액)", "영업수익", "매출")
         if revenue is not None:
             parts.append(f"매출 {revenue/1e8:,.0f}억")
 
-        op_income = get_val(yr_df, "영업이익", "영업이익(dart)")
+        op_income = get_val(yr_df, "영업이익", "영업이익(dart)", "영업이익(손실)")
         if op_income is not None:
             parts.append(f"영업이익 {op_income/1e8:,.0f}억")
 
@@ -205,6 +205,7 @@ def get_financials(stock_code: str) -> str:
             "지배주주순이익",
             "지배기업의 소유주에게 귀속되는 당기순이익",
             "지배기업주주지분순이익",
+            "지배기업 소유주지분",
         )
         if ctrl_income is not None:
             parts.append(f"지배순이익 {ctrl_income/1e8:,.0f}억")
