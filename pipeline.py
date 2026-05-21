@@ -53,17 +53,16 @@ async def get_afterhours_stocks() -> list:
 
         print(f"  ✅ 채널 확인: {entity.title}")
 
-        # 오늘 날짜의 시간외 메시지 찾기 (최근 50개 스캔)
-        today = datetime.now().strftime("%m%d")  # 예: 0519
+        # 가장 최근 시간외 메시지 찾기 (날짜 무관, 최근 100개 스캔)
         found_msg = None
-        async for msg in client.iter_messages(entity, limit=50):
+        async for msg in client.iter_messages(entity, limit=100):
             if msg.text and "시간외" in msg.text and ("특이종목" in msg.text or "단일가" in msg.text):
                 found_msg = msg
-                print(f"  ✅ 시간외 메시지 발견: {msg.date}")
+                print(f"  ✅ 시간외 메시지 발견: {msg.date.strftime('%Y-%m-%d %H:%M')} (KST)")
                 break
 
         if not found_msg:
-            print("  ❌ 오늘 시간외 메시지 없음")
+            print("  ❌ 시간외 메시지 없음 (최근 100개 확인)")
             return []
 
         stocks = parse_afterhours_message(found_msg.text)
