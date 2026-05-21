@@ -161,21 +161,23 @@ def get_financials(stock_code: str) -> str:
         return "DART 매칭 실패"
 
     cur_year = datetime.now().year
-    all_dfs = []
+    # 연도별 CFS/OFS 구분 수집
+    year_data = {}  # {yr: (df, is_cfs)}
 
     for yr in range(cur_year - 3, cur_year):
         df = get_financial_statement(corp_code, yr, "CFS")
-        if df.empty:
-            df = get_financial_statement(corp_code, yr, "OFS")
         if not df.empty:
             df["year"] = yr
-            all_dfs.append(df)
+            year_data[yr] = (df, True)
+        else:
+            df = get_financial_statement(corp_code, yr, "OFS")
+            if not df.empty:
+                df["year"] = yr
+                year_data[yr] = (df, False)
         time.sleep(0.2)
 
-    if not all_dfs:
+    if not year_data:
         return "재무 데이터 없음"
-
-    raw = pd.concat(all_dfs, ignore_index=True)
 
     def get_val(yr_df, *keys):
         for key in keys:
@@ -189,8 +191,8 @@ def get_financials(stock_code: str) -> str:
         return None
 
     lines = []
-    for yr in sorted(raw["year"].unique()):
-        yr_df = raw[raw["year"] == yr]
+    for yr in sorted(year_data.keys()):
+        yr_df, is_cfs = year_data[yr]
         parts = []
 
         revenue = get_val(yr_df, "매출액", "수익(매출액)", "영업수익", "매출")
@@ -201,14 +203,26 @@ def get_financials(stock_code: str) -> str:
         if op_income is not None:
             parts.append(f"영업이익 {op_income/1e8:,.0f}억")
 
-        ctrl_income = get_val(yr_df,
-            "지배주주순이익",
-            "지배기업의 소유주에게 귀속되는 당기순이익",
-            "지배기업주주지분순이익",
-            "지배기업 소유주지분",
-        )
-        if ctrl_income is not None:
-            parts.append(f"지배순이익 {ctrl_income/1e8:,.0f}억")
+        if is_cfs:
+            # 연결: 지배주주순이익
+            net = get_val(yr_df,
+                "지배주주순이익",
+                "지배기업의 소유주에게 귀속되는 당기순이익",
+                "지배기업주주지분순이익",
+                "지배기업 소유주지분",
+            )
+            label = "지배순이익"
+        else:
+            # 별도: 당기순이익
+            net = get_val(yr_df,
+                "당기순이익",
+                "당기순이익(손실)",
+                "당기손익",
+            )
+            label = "당기순이익(별도)"
+
+        if net is not None:
+            parts.append(f"{label} {net/1e8:,.0f}억")
 
         if parts:
             lines.append(f"[{yr}년] " + " / ".join(parts))
