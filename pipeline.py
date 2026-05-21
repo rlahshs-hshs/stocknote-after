@@ -67,7 +67,7 @@ async def get_afterhours_stocks() -> list:
 
         stocks = parse_afterhours_message(found_msg.text)
         # 상승 종목만 필터링
-        stocks = [s for s in stocks if float(s["change_pct"].replace("%","").replace("+","")) > 0]
+        stocks = [s for s in stocks if float(s["change_pct"].replace("%","").replace("+","")) >= 5.0]
         print(f"  상승 종목 {len(stocks)}개 파싱 완료")
 
     return stocks
@@ -76,7 +76,7 @@ async def get_afterhours_stocks() -> list:
 def parse_afterhours_message(text: str) -> list:
     """시간외 메시지 파싱 → 종목 리스트"""
     pattern = re.compile(
-        r'([가-힣A-Za-z0-9&\.\s]+?)\s*\n'
+        r'([가-힣A-Za-z0-9&\.]+(?:[ ][가-힣A-Za-z0-9&\.]+)*)\s*\n'  # 종목명 (줄바꿈 포함 안 함)
         r'\((\d{6})\)\s*\n'
         r'\(\s*([+-][\d.]+%)\s*\)\s*\n'
         r'(.*?)(?=\n[가-힣A-Za-z]|\Z)',
@@ -88,6 +88,9 @@ def parse_afterhours_message(text: str) -> list:
         code   = m.group(2).strip()
         change = m.group(3).strip()
         reason = m.group(4).strip().replace("\n", " ")
+        # 이름에 줄바꿈이나 불필요한 텍스트 포함된 경우 제외
+        if "\n" in name or len(name) > 20:
+            continue
         stocks.append({
             "name":       name,
             "code":       code,
@@ -136,16 +139,30 @@ def get_financial_statement(corp_code: str, year: int, fs_div: str = "CFS") -> p
     return df
 
 
+def get_market_cap(stock_code: str) -> str:
+    """네이버 금융에서 시총 조회"""
+    try:
+        url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        res.encoding = "euc-kr"
+        mc = re.search(r'시가총액.*?([\d,]+)억원', res.text)
+        if mc:
+            return mc.group(1) + "억원"
+    except Exception:
+        pass
+    return "조회불가"
+
+
 def get_financials(stock_code: str) -> str:
-    """3개년 재무 요약 텍스트 반환"""
+    """3개년 재무 요약 (매출 / 영업이익 / 지배주주순이익)"""
     corp_code = get_corp_code(stock_code)
     if not corp_code:
         return "DART 매칭 실패"
 
-    start_year = datetime.now().year - 3
+    cur_year = datetime.now().year
     all_dfs = []
 
-    for yr in range(start_year, start_year + 3):
+    for yr in range(cur_year - 3, cur_year):
         df = get_financial_statement(corp_code, yr, "CFS")
         if df.empty:
             df = get_financial_statement(corp_code, yr, "OFS")
@@ -159,28 +176,34 @@ def get_financials(stock_code: str) -> str:
 
     raw = pd.concat(all_dfs, ignore_index=True)
 
-    # 계정과목 매핑
-    KEY_MAP = {
-        "매출액": "매출",
-        "영업이익": "영업이익",
-        "영업이익(dart)": "영업이익(dart)",
-        "당기순이익": "순이익(연결)",
-        "지배주주순이익": "순이익(지배)",
-    }
+    def get_val(yr_df, *keys):
+        for key in keys:
+            row = yr_df[yr_df["account_nm"] == key]
+            if not row.empty:
+                try:
+                    v = float(row.iloc[0]["thstrm_amount"].replace(",", ""))
+                    return v
+                except Exception:
+                    pass
+        return None
 
     lines = []
     for yr in sorted(raw["year"].unique()):
         yr_df = raw[raw["year"] == yr]
         parts = []
-        for account, label in KEY_MAP.items():
-            row = yr_df[yr_df["account_nm"] == account]
-            if row.empty:
-                continue
-            try:
-                val = float(row.iloc[0]["thstrm_amount"].replace(",", ""))
-                parts.append(f"{label} {val/1e8:,.0f}억")
-            except Exception:
-                pass
+
+        revenue = get_val(yr_df, "매출액")
+        if revenue is not None:
+            parts.append(f"매출 {revenue/1e8:,.0f}억")
+
+        op_income = get_val(yr_df, "영업이익", "영업이익(dart)")
+        if op_income is not None:
+            parts.append(f"영업이익 {op_income/1e8:,.0f}억")
+
+        ctrl_income = get_val(yr_df, "지배주주순이익")
+        if ctrl_income is not None:
+            parts.append(f"지배순이익 {ctrl_income/1e8:,.0f}억")
+
         if parts:
             lines.append(f"[{yr}년] " + " / ".join(parts))
 
@@ -190,12 +213,13 @@ def get_financials(stock_code: str) -> str:
 # ─────────────────────────────────────────
 # 3. HTML 생성
 # ─────────────────────────────────────────
-def generate_html(date_str: str, stocks: list, financials: dict) -> str:
+def generate_html(date_str: str, stocks: list, financials: dict, market_caps: dict) -> str:
     today_label = datetime.now().strftime("%Y.%m.%d")
 
     cards = ""
     for s in stocks:
         fin = financials.get(s["code"], "재무 데이터 없음")
+        mc  = market_caps.get(s["code"], "조회불가")
         cards += f"""
 <div class="stock-card">
   <div class="card-header">
@@ -205,12 +229,15 @@ def generate_html(date_str: str, stocks: list, financials: dict) -> str:
       <span class="rate">{s['change_pct']}</span>
     </div>
   </div>
+  <div class="stock-info-bar">
+    <span>시총 {mc}</span>
+  </div>
   <div class="section-box">
     <div class="section-label">📢 시간외 재료</div>
     <div class="section-text">{s['reason']}</div>
   </div>
   <div class="section-box">
-    <div class="section-label">📊 재무 요약 (DART)</div>
+    <div class="section-label">📊 재무 요약 (DART · 3개년)</div>
     <div class="section-text fin-text">{fin.replace(chr(10), '<br>')}</div>
   </div>
 </div>"""
@@ -246,6 +273,7 @@ body{{font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;
                 color:#aaa;font-weight:600;margin-bottom:5px}}
 .section-text{{font-size:13px;color:#444;line-height:1.65}}
 .fin-text{{font-family:monospace;font-size:12px;color:#333}}
+.stock-info-bar{{padding:7px 16px;background:#f8f7f4;font-size:12px;color:#666;border-bottom:1px solid #eee}}
 .footer{{text-align:center;padding:20px;font-size:11px;color:#bbb}}
 </style>
 </head>
@@ -321,17 +349,19 @@ async def main():
     for s in stocks:
         print(f"    {s['name']} ({s['code']}) {s['change_pct']}")
 
-    # 2. DART 재무 수집
-    print("\n[2] DART 재무 수집 중...")
+    # 2. DART 재무 + 시총 수집
+    print("\n[2] DART 재무 + 시총 수집 중...")
     financials = {}
+    market_caps = {}
     for s in stocks:
         print(f"  {s['name']} ({s['code']}) 조회 중...")
         financials[s["code"]] = get_financials(s["code"])
+        market_caps[s["code"]] = get_market_cap(s["code"])
         time.sleep(0.5)
 
     # 3. HTML 생성
     print("\n[3] HTML 생성 중...")
-    html = generate_html(date_label, stocks, financials)
+    html = generate_html(date_label, stocks, financials, market_caps)
     filename = f"after_{date_str}.html"
 
     # 로컬 저장
